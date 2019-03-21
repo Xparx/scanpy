@@ -155,6 +155,8 @@ def plot_scatter(
             order = np.argsort(color_vector)
             color_vector = color_vector[order]
             _data_points = data_points[component_idx][order, :]
+            if kwargs['s'] is not None and (len(kwargs['s']) > 1):
+                kwargs['s'] = kwargs['s'][order]
 
         else:
             _data_points = data_points[component_idx]
