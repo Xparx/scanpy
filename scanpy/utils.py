@@ -6,7 +6,7 @@ import inspect
 from weakref import WeakSet
 from collections import namedtuple
 from functools import partial, wraps
-from types import ModuleType
+from types import ModuleType, MethodType
 from typing import Union, Callable, Optional
 
 import numpy as np
@@ -15,7 +15,8 @@ from natsort import natsorted
 from textwrap import dedent
 from pandas.api.types import CategoricalDtype
 
-from . import settings, logging as logg
+from ._settings import settings
+from . import logging as logg
 import warnings
 
 EPS = 1e-15
@@ -24,8 +25,10 @@ EPS = 1e-15
 def check_versions():
     from distutils.version import LooseVersion
 
-    if sys.version_info < (3, 0):
-        warnings.warn('Scanpy only runs reliably with Python 3, preferrably >=3.5.')
+    if sys.version_info < (3, 6):
+        warnings.warn('Scanpy prefers Python 3.6 or higher. '
+                      'Currently, Python 3.5 leads to a bug in `tl.marker_gene_overlap` '
+                      'and we might stop supporting it in the future.')
 
     import anndata
     # NOTE: pytest does not correctly retrieve anndata's version? why?
@@ -101,7 +104,7 @@ def descend_classes_and_funcs(mod: ModuleType, root: str, encountered=None):
     for obj in vars(mod).values():
         if not getattr(obj, '__module__', getattr(obj, '__qualname__', getattr(obj, '__name__', ''))).startswith(root):
             continue
-        if isinstance(obj, Callable):
+        if isinstance(obj, Callable) and not isinstance(obj, MethodType):
             yield obj
             if isinstance(obj, type):
                 yield from (m for m in vars(obj).values() if isinstance(m, Callable))
@@ -878,6 +881,7 @@ def subsample_n(X, n=0, seed=0):
 def check_presence_download(filename, backup_url):
     """Check if file is present otherwise download."""
     import os
+    filename = str(filename) #  Throws error for Path on 3.5
     if not os.path.exists(filename):
         from .readwrite import download_progress
         dr = os.path.dirname(filename)

@@ -14,7 +14,12 @@ gene_symbols
     alternative names to be used.
 use_raw
     Use `.raw` attribute of `adata` for coloring with gene expression. If
-    `None`, uses `.raw` if present.\
+    `None`, uses `.raw` if present.
+layer
+    Name of the AnnData object layer that wants to be plotted. By default 
+    adata.raw.X is plotted. If `use_raw=False` is set, then `adata.X` is plotted. 
+    If `layer` is set to a valid layer name, then the layer is plotted. `layer` 
+    takes precedence over `use_raw`.\
 """
 
 
@@ -32,7 +37,7 @@ arrows_kwds
 """
 
 
-doc_scatter_bulk = """\
+_doc_scatter_common = """\
 sort_order
     For continuous annotations used as color parameter, plot data points
     with higher values on top of others.
@@ -69,12 +74,16 @@ palette
 frameon
     Draw a frame around the scatter plot. Defaults to value set in
     :func:`~scanpy.api.tl.set_figure_params`, defaults to `True`.
+"""
+_doc_scatter_panels = """\
 ncols
     Number of panels per row.
 wspace
     Adjust the width of the space between multiple panels.
 hspace
     Adjust the height of the space between multiple panels.
+"""
+_doc_scatter_meta = """\
 title
     Provide title for panels either as string or list of strings,
     e.g. `['title1', 'title2', ...]`.
@@ -84,6 +93,11 @@ kwargs : further keyword arguments, optional
 return_fig
     Return the matplotlib figure.\
 """
+
+# temporarily add a special variable doc_scatter_temp for pl.scatter
+# because currently pl.scatter does not accept ncols, wspace, and hspace
+doc_scatter_temp = _doc_scatter_common + _doc_scatter_meta
+doc_scatter_bulk = _doc_scatter_common + _doc_scatter_panels + _doc_scatter_meta
 
 
 doc_show_save_ax = """\

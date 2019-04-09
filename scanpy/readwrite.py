@@ -1,19 +1,20 @@
 """Reading and Writing
 """
 
-import os
 import sys
+import time
+from pathlib import Path, PurePath
+from typing import Union
+
 import numpy as np
 import pandas as pd
-import time
 import tables
-from pathlib import Path
 import anndata
 from anndata import AnnData, read_loom, \
     read_csv, read_excel, read_text, read_hdf, read_mtx
 from anndata import read as read_h5ad
 
-from . import settings
+from ._settings import settings
 from . import logging as logg
 
 # .gz and .bz2 suffixes are also allowed for text formats
@@ -79,7 +80,7 @@ def read(filename, backed=False, sheet=None, ext=None, delimiter=None,
     # generate filename and read to dict
     filekey = filename
     filename = settings.writedir + filekey + '.' + settings.file_format_data
-    if not os.path.exists(filename):
+    if not Path(filename).exists():
         raise ValueError('Reading with filekey "{}" failed, the '
                          'inferred filename "{}" does not exist. '
                          'If you intended to provide a filename, either '
@@ -237,26 +238,29 @@ def read_10x_mtx(path, var_names='gene_symbols', make_unique=True, cache=False, 
     -------
     An :class:`~anndata.AnnData`.
     """
-    path = str(path)
-    if os.path.exists(os.path.join(path, 'genes.tsv')):
-        return _read_legacy_10x_mtx(path, var_names=var_names,
-                                    make_unique=make_unique, cache=cache)
+    path = Path(path)
+    genefile_exists = (path / 'genes.tsv').is_file()
+    read = _read_legacy_10x_mtx if genefile_exists else _read_v3_10x_mtx
+    adata = read(
+        str(path),
+        var_names=var_names,
+        make_unique=make_unique,
+        cache=cache,
+    )
+    if genefile_exists or not gex_only:
+        return adata
     else:
-        adata = _read_v3_10x_mtx(path, var_names=var_names,
-                                 make_unique=make_unique, cache=cache)
-        if not gex_only:
-            return adata
-        else:
-            gex_rows = list(map(lambda x: x == 'Gene Expression', adata.var['feature_types']))
-            return adata[:, gex_rows]
+        gex_rows = list(map(lambda x: x == 'Gene Expression', adata.var['feature_types']))
+        return adata[:, gex_rows]
 
 
 def _read_legacy_10x_mtx(path, var_names='gene_symbols', make_unique=True, cache=False):
     """
     Read mex from output from Cell Ranger v2 or earlier versions
     """
-    adata = read(os.path.join(path, 'matrix.mtx'), cache=cache).T  # transpose the data
-    genes = pd.read_csv(os.path.join(path, 'genes.tsv'), header=None, sep='\t')
+    path = Path(path)
+    adata = read(path / 'matrix.mtx', cache=cache).T  # transpose the data
+    genes = pd.read_csv(path / 'genes.tsv', header=None, sep='\t')
     if var_names == 'gene_symbols':
         var_names = genes[1]
         if make_unique:
@@ -268,7 +272,7 @@ def _read_legacy_10x_mtx(path, var_names='gene_symbols', make_unique=True, cache
         adata.var['gene_symbols'] = genes[1].values
     else:
         raise ValueError('`var_names` needs to be \'gene_symbols\' or \'gene_ids\'')
-    adata.obs_names = pd.read_csv(os.path.join(path, 'barcodes.tsv'), header=None)[0]
+    adata.obs_names = pd.read_csv(path / 'barcodes.tsv', header=None)[0]
     return adata
 
 
@@ -276,8 +280,9 @@ def _read_v3_10x_mtx(path, var_names='gene_symbols', make_unique=True, cache=Fal
     """
     Read mex from output from Cell Ranger v3 or later versions
     """
-    adata = read(os.path.join(path, 'matrix.mtx.gz'), cache=cache).T  # transpose the data
-    genes = pd.read_csv(os.path.join(path, 'features.tsv.gz'), header=None, sep='\t')
+    path = Path(path)
+    adata = read(path / 'matrix.mtx.gz', cache=cache).T  # transpose the data
+    genes = pd.read_csv(path / 'features.tsv.gz', header=None, sep='\t')
     if var_names == 'gene_symbols':
         var_names = genes[1]
         if make_unique:
@@ -290,7 +295,7 @@ def _read_v3_10x_mtx(path, var_names='gene_symbols', make_unique=True, cache=Fal
     else:
         raise ValueError('`var_names` needs to be \'gene_symbols\' or \'gene_ids\'')
     adata.var['feature_types'] = genes[2].values
-    adata.obs_names = pd.read_csv(os.path.join(path, 'barcodes.tsv.gz'), header=None)[0]
+    adata.obs_names = pd.read_csv(path / 'barcodes.tsv.gz', header=None)[0]
     return adata
 
 
@@ -375,20 +380,21 @@ def read_params(filename, asheader=False, verbosity=0):
     return params
 
 
-def write_params(filename, *args, **dicts):
+def write_params(path, *args, **dicts):
     """Write parameters to file, so that it's readable by read_params.
 
     Uses INI file format.
     """
-    if not os.path.exists(os.path.dirname(filename)):
-        os.makedirs(os.path.dirname(filename))
+    path = Path(path)
+    if not path.parent.is_dir():
+        path.parent.mkdir(parents=True)
     if len(args) == 1:
         d = args[0]
-        with open(filename, 'w') as f:
+        with path.open('w') as f:
             for key in d:
                 f.write(key + ' = ' + str(d[key]) + '\n')
     else:
-        with open(filename, 'w') as f:
+        with path.open('w') as f:
             for k, d in dicts.items():
                 f.write('[' + k + ']\n')
                 for key, val in d.items():
@@ -437,13 +443,12 @@ def _read(filename, backed=False, sheet=None, ext=None, delimiter=None,
             logg.msg('reading sheet', sheet, 'from file', filename, v=4)
             return read_hdf(filename, sheet)
     # read other file types
-    filename_cache = (settings.cachedir + filename.lstrip(
-        './').replace('/', '-').replace('.' + ext, '.h5ad'))
-    if filename_cache.endswith('.gz'): filename_cache = filename_cache[:-3]
-    if filename_cache.endswith('.bz2'): filename_cache = filename_cache[:-4]
-    if cache and os.path.exists(filename_cache):
-        logg.info('... reading from cache file', filename_cache)
-        adata = read_h5ad(filename_cache, backed=False)
+    path_cache = Path(settings.cachedir) / _slugify(filename).replace('.' + ext, '.h5ad')  # type: Path
+    if path_cache.suffix in {'.gz', '.bz2'}:
+        path_cache = path_cache.with_suffix('')
+    if cache and path_cache.is_file():
+        logg.info('... reading from cache file', path_cache)
+        adata = read_h5ad(path_cache, backed=False)
     else:
         if not is_present:
             raise FileNotFoundError('Did not find file {}.'.format(filename))
@@ -477,11 +482,26 @@ def _read(filename, backed=False, sheet=None, ext=None, delimiter=None,
         if cache:
             logg.info('... writing an', settings.file_format_data,
                       'cache file to speedup reading next time')
-            if not os.path.exists(os.path.dirname(filename_cache)):
-                os.makedirs(os.path.dirname(filename_cache))
+            if not path_cache.parent.is_dir():
+                path_cache.parent.mkdir(parents=True)
             # write for faster reading when calling the next time
-            adata.write(filename_cache)
+            adata.write(path_cache)
     return adata
+
+
+def _slugify(path: Union[str, PurePath]) -> str:
+    """Make a path into a filename."""
+    if not isinstance(path, PurePath):
+        path = PurePath(path)
+    parts = list(path.parts)
+    if parts[0] == '/':
+        parts.pop(0)
+    elif len(parts[0]) == 3 and parts[0][1:] == ':\\':
+        parts[0] = parts[0][0]  # C:\ → C
+    filename = '-'.join(parts)
+    assert '/' not in filename, filename
+    assert not filename[1:].startswith(':'), filename
+    return filename
 
 
 def _read_softgz(filename):
@@ -540,15 +560,9 @@ def _read_softgz(filename):
     # Convert the Python list of lists to a Numpy array and transpose to match
     # the Scanpy convention of storing samples in rows and variables in colums.
     X = np.array(X).T
-    row_names = sample_names
-    col_names = gene_names
-    obs = np.zeros((len(row_names),), dtype=[('obs_names', 'S21'), ('groups', 'S21')])
-    obs['obs_names'] = sample_names
-    obs['groups'] = groups
-    var = np.zeros((len(gene_names),), dtype=[('var_names', 'S21')])
-    var['var_names'] = gene_names
-    ddata = {'X': X, 'obs': obs, 'var': var}
-    return AnnData(ddata)
+    obs = pd.DataFrame({"groups": groups}, index=sample_names)
+    var = pd.DataFrame(index=gene_names)
+    return AnnData(X=X, obs=obs, var=var)
 
 
 # -------------------------------------------------------------------------------
@@ -646,19 +660,19 @@ def download_progress(count, blockSize, totalSize):
     sys.stdout.flush()
 
 
-def check_datafile_present_and_download(filename, backup_url=None):
+def check_datafile_present_and_download(path, backup_url=None):
     """Check whether the file is present, otherwise download.
     """
-    if os.path.exists(filename): return True
+    path = Path(path)
+    if path.is_file(): return True
     if backup_url is None: return False
     logg.info('try downloading from url\n' + backup_url + '\n' +
               '... this may take a while but only happens once')
-    d = os.path.dirname(filename)
-    if not os.path.exists(d):
-        logg.info('creating directory', d + '/', 'for saving data')
-        os.makedirs(d)
+    if not path.parent.is_dir():
+        logg.info('creating directory', str(path.parent) + '/', 'for saving data')
+        path.parent.mkdir(parents=True)
     from urllib.request import urlretrieve
-    urlretrieve(backup_url, filename, reporthook=download_progress)
+    urlretrieve(backup_url, str(path), reporthook=download_progress)
     logg.info('')
     return True
 
