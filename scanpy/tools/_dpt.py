@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import numpy as np
 import pandas as pd
 import scipy as sp
@@ -24,12 +26,12 @@ def _diffmap(adata, n_comps=15):
 
 def dpt(adata, n_dcs=10, n_branchings=0, min_group_size=0.01,
         allow_kendall_tau_shift=True, copy=False):
-    """Infer progression of cells through geodesic distance along the graph [Haghverdi16]_ [Wolf17i]_.
+    """Infer progression of cells through geodesic distance along the graph [Haghverdi16]_ [Wolf19]_.
 
     Reconstruct the progression of a biological process from snapshot
     data. `Diffusion Pseudotime` has been introduced by [Haghverdi16]_ and
-    implemented within Scanpy [Wolf17]_. Here, we use a further developed
-    version, which is able to deal with disconnected graphs [Wolf17i]_ and can
+    implemented within Scanpy [Wolf18]_. Here, we use a further developed
+    version, which is able to deal with disconnected graphs [Wolf19]_ and can
     be run in a `hierarchical` mode by setting the parameter
     `n_branchings>1`. We recommend, however, to only use
     :func:`~scanpy.api.tl.dpt` for computing pseudotime (`n_branchings=0`) and
@@ -79,10 +81,10 @@ def dpt(adata, n_dcs=10, n_branchings=0, min_group_size=0.01,
 
     If `n_branchings==0`, no field `dpt_groups` will be written.
 
-    dpt_pseudotime : `pd.Series` (`adata.obs`, dtype `float`)
+    **dpt_pseudotime** : :class:`pandas.Series` (`adata.obs`, dtype `float`)
         Array of dim (number of samples) that stores the pseudotime of each
         cell, that is, the DPT distance with respect to the root cell.
-    dpt_groups : `pd.Series` (`adata.obs`, dtype `category`)
+    **dpt_groups** : :class:`pandas.Series` (`adata.obs`, dtype `category`)
         Array of dim (number of samples) that stores the subgroup id ('0',
         '1', ...) for each cell. The groups  typically correspond to
         'progenitor cells', 'undecided cells' or 'branches' of a process.
@@ -284,7 +286,7 @@ class DPT(Neighbors):
                     # print(self.segs_adjacency)
         # self.segs_adjacency.eliminate_zeros()
 
-    def select_segment(self, segs, segs_tips, segs_undecided):
+    def select_segment(self, segs, segs_tips, segs_undecided) -> Tuple[int, int]:
         """Out of a list of line segments, choose segment that has the most
         distant second data point.
 
@@ -573,7 +575,7 @@ class DPT(Neighbors):
                     break
         segs_undecided += [False for i in range(n_add)]
 
-    def _detect_branching(self, Dseg, tips, seg_reference=None):
+    def _detect_branching(self, Dseg: np.ndarray, tips: np.ndarray, seg_reference=None):
         """Detect branching on given segment.
 
         Call function __detect_branching three times for all three orderings of
@@ -583,9 +585,9 @@ class DPT(Neighbors):
 
         Parameters
         ----------
-        Dseg : np.ndarray
+        Dseg
             Dchosen distance matrix restricted to segment.
-        tips : np.ndarray
+        tips
             The three tip points. They form a 'triangle' that contains the data.
 
         Returns
@@ -775,7 +777,7 @@ class DPT(Neighbors):
             ibranch = imax + 1
         return idcs[:ibranch]
 
-    def kendall_tau_split(self, a, b):
+    def kendall_tau_split(self, a, b) -> int:
         """Return splitting index that maximizes correlation in the sequences.
 
         Compute difference in Kendall tau for all splitted sequences.
@@ -794,8 +796,7 @@ class DPT(Neighbors):
 
         Returns
         -------
-        i : int
-            Splitting index according to above description.
+        Splitting index according to above description.
         """
         if a.size != b.size:
             raise ValueError('a and b need to have the same size')
@@ -871,20 +872,24 @@ class DPT(Neighbors):
         """
         return 2./(len_old-2)*(-float(diff_neg)/(len_old-1)+tau_old)
 
-    def _kendall_tau_diff(self, a, b, i):
+    def _kendall_tau_diff(self, a: np.ndarray, b: np.ndarray, i) -> Tuple[int, int]:
         """Compute difference in concordance of pairs in split sequences.
 
         Consider splitting a and b at index i.
 
         Parameters
         ----------
-        a, b : np.ndarray
+        a
+            ?
+        b
+            ?
 
         Returns
         -------
-        diff_pos, diff_neg : int, int
-            Difference between concordant and non-concordant pairs for both
-            subsequences.
+        diff_pos
+            Difference between concordant pairs for both subsequences.
+        diff_neg
+            Difference between non-concordant pairs for both subsequences.
         """
         # compute ordering relation of the single points a[i] and b[i]
         # with all previous points of the sequences a and b, respectively

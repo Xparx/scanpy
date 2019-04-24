@@ -1,9 +1,6 @@
 import sys
-import logging
 from pathlib import Path
 from datetime import datetime
-
-from jinja2.defaults import DEFAULT_FILTERS
 
 import matplotlib  # noqa
 # Don’t use tkinter agg when importing scanpy → … → matplotlib
@@ -12,9 +9,6 @@ matplotlib.use('agg')
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
 import scanpy  # noqa
-
-
-logger = logging.getLogger(__name__)
 
 
 # -- General configuration ------------------------------------------------
@@ -101,6 +95,7 @@ html_logo = '_static/img/Scanpy_Logo_RGB.png'
 
 def setup(app):
     app.add_stylesheet('css/custom.css')
+    app.connect('autodoc-process-docstring', insert_function_images)
 
 
 # -- Options for other output formats ------------------------------------------
@@ -122,15 +117,50 @@ texinfo_documents = [
 # -- Images for plot functions -------------------------------------------------
 
 
-def api_image(qualname: str) -> str:
-    # I’d like to make this a contextfilter, but the jinja context doesn’t contain the path,
-    # so no chance to not hardcode “api/” here.
-    path = Path(__file__).parent / 'api' / f'{qualname}.png'
-    print(path, path.is_file())
-    return f'.. image:: {path.name}\n   :width: 200\n   :align: right' if path.is_file() else ''
+def insert_function_images(app, what, name, obj, options, lines):
+    path = Path(__file__).parent / 'api' / f'{name}.png'
+    if what != 'function' or not path.is_file(): return
+    lines[0:0] = [f'.. image:: {path.name}', '   :width: 200', '   :align: right', '']
 
 
-# html_context doesn’t apply to autosummary templates ☹
-# and there’s no way to insert filters into those templates
-# so we have to modify the default filters
-DEFAULT_FILTERS['api_image'] = api_image
+# -- Test for new scanpydoc functionality --------------------------------------
+
+
+import re
+from sphinx.ext.napoleon import NumpyDocstring
+
+
+def process_return(lines):
+    for line in lines:
+        m = re.fullmatch(r'(?P<param>\w+)\s+:\s+(?P<type>[\w.]+)', line)
+        if m:
+            # Once this is in scanpydoc, we can use the fancy hover stuff
+            yield f'**{m["param"]}** : :class:`~{m["type"]}`'
+        else:
+            yield line
+
+
+def scanpy_parse_returns_section(self, section):
+    lines_raw = list(process_return(self._dedent(self._consume_to_next_section())))
+    lines = self._format_block(':returns: ', lines_raw)
+    if lines and lines[-1]:
+        lines.append('')
+    return lines
+
+
+NumpyDocstring._parse_returns_section = scanpy_parse_returns_section
+
+
+# -- Debug code ----------------------------------------------------------------
+
+
+# Just do the following to see the rst of a function:
+# rm -f _build/doctrees/api/scanpy.<what_you_want>.doctree; DEBUG=1 make html
+import os
+if os.environ.get('DEBUG') is not None:
+    import sphinx.ext.napoleon
+    pd = sphinx.ext.napoleon._process_docstring
+    def pd_new(app, what, name, obj, options, lines):
+        pd(app, what, name, obj, options, lines)
+        print(*lines, sep='\n')
+    sphinx.ext.napoleon._process_docstring = pd_new

@@ -1,4 +1,5 @@
 from collections import namedtuple
+from typing import List
 
 import numpy as np
 import scipy as sp
@@ -18,23 +19,28 @@ def paga(
         use_rna_velocity=False,
         model='v1.2',
         copy=False):
-    """\
-    Generate cellular maps of differentiation manifolds with complex
-    topologies [Wolf17i]_.
+    """Mapping out the coarse-grained connectivity structures of complex manifolds [Wolf19]_.
 
     By quantifying the connectivity of partitions (groups, clusters) of the
     single-cell graph, partition-based graph abstraction (PAGA) generates a much
     simpler abstracted graph (*PAGA graph*) of partitions, in which edge weights
     represent confidence in the presence of connections. By tresholding this
-    confidence in :func:`scanpy.api.paga`, a much simpler representation of data
-    can be obtained.
+    confidence in :func:`~scanpy.pl.paga`, a much simpler representation of the
+    manifold data is obtained, which is nonetheless faithful to the topology of
+    the manifold.
 
-    The confidence can be interpreted as the ratio of the actual versus the
+    The confidence should be interpreted as the ratio of the actual versus the
     expected value of connetions under the null model of randomly connecting
     partitions. We do not provide a p-value as this null model does not
     precisely capture what one would consider "connected" in real data, hence it
     strongly overestimates the expected value. See an extensive discussion of
-    this in [Wolf17i]_.
+    this in [Wolf19]_.
+
+    .. note::
+        Note that you can use the result of :func:`~scanpy.pl.paga` in
+        :func:`~scanpy.tl.umap` and :func:`~scanpy.tl.draw_graph` via
+        `init_pos='paga'` to get single-cell embeddings that are typically more
+        faithful to the global topology.
 
     Parameters
     ----------
@@ -48,7 +54,7 @@ def paga(
         transitions. Requires that `adata.uns` contains a directed single-cell
         graph with key `['velocity_graph']`. This feature might be subject
         to change in the future.
-    model : {{'v1.2', 'v1.0'}}, optional (default: 'v1.2')
+    model : {'v1.2', 'v1.0'}, optional (default: 'v1.2')
         The PAGA connectivity model.
     copy : `bool`, optional (default: `False`)
         Copy `adata` before computation and return a copy. Otherwise, perform
@@ -56,18 +62,18 @@ def paga(
 
     Returns
     -------
-    Returns or updates `adata` depending on `copy` with
-    connectivities : np.ndarray (adata.uns['connectivities'])
+    **connectivities** : :class:`numpy.ndarray` (adata.uns['connectivities'])
         The full adjacency matrix of the abstracted graph, weights correspond to
         confidence in the connectivities of partitions.
-    connectivities_tree : sc.sparse csr matrix (adata.uns['connectivities_tree'])
+    **connectivities_tree** : :class:`scipy.sparse.csr_matrix` (adata.uns['connectivities_tree'])
         The adjacency matrix of the tree-like subgraph that best explains
         the topology.
 
     Notes
     -----
-    Together with a random walk-based distance measure, this generates a partial
-    coordinatization of data useful for exploring and explaining its variation.
+    Together with a random walk-based distance measure
+    (e.g. :func:`scanpy.tl.dpt`) this generates a partial coordinatization of
+    data useful for exploring and explaining its variation.
 
     See Also
     --------
@@ -323,7 +329,7 @@ class PAGA():
         self.transitions_confidence = transitions_confidence.T
 
 
-def paga_degrees(adata):
+def paga_degrees(adata) -> List[int]:
     """Compute the degree of each node in the abstracted graph.
 
     Parameters
@@ -333,8 +339,7 @@ def paga_degrees(adata):
 
     Returns
     -------
-    degrees : list
-        List of degrees for each node.
+    List of degrees for each node.
     """
     import networkx as nx
     g = nx.Graph(adata.uns['paga']['connectivities'])
@@ -342,7 +347,7 @@ def paga_degrees(adata):
     return degrees
 
 
-def paga_expression_entropies(adata):
+def paga_expression_entropies(adata) -> List[float]:
     """Compute the median expression entropy for each node-group.
 
     Parameters
@@ -352,8 +357,7 @@ def paga_expression_entropies(adata):
 
     Returns
     -------
-    entropies : list
-        Entropies of median expressions for each node.
+    Entropies of median expressions for each node.
     """
     from scipy.stats import entropy
     groups_order, groups_masks = utils.select_groups(
@@ -365,7 +369,7 @@ def paga_expression_entropies(adata):
         x_probs = (x_median - np.nanmin(x_median)) / (np.nanmax(x_median) - np.nanmin(x_median))
         entropies.append(entropy(x_probs))
     return entropies
-    
+
 
 def paga_compare_paths(adata1, adata2,
                        adjacency_key='connectivities', adjacency_key2=None):

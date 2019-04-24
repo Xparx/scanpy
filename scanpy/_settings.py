@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from time import time
 
@@ -93,7 +94,7 @@ class ScanpyConfig(object):
     def verbosity(self, verbosity):
         verbosity_str_options = ["error", "warn", "info", "hint"]
         if isinstance(verbosity, int):
-            self._verbosity == verbosity
+            self._verbosity = verbosity
         elif isinstance(verbosity, str):
             verbosity = verbosity.lower()
             if verbosity not in verbosity_str_options:
@@ -210,7 +211,7 @@ class ScanpyConfig(object):
     @datasetdir.setter
     def datasetdir(self, datasetdir):
         _type_check(datasetdir, "datasetdir", [str, Path])
-        self._datasetdir = Path(datasetdir).absolute()
+        self._datasetdir = Path(datasetdir).resolve()
 
     @property
     def figdir(self):
@@ -333,7 +334,8 @@ class ScanpyConfig(object):
             set_rcParams_scanpy(fontsize=fontsize, color_map=color_map)
         self._frameon = frameon
 
-    def _is_run_from_ipython(self):
+    @staticmethod
+    def _is_run_from_ipython():
         """Determines whether run from Ipython.
 
         Only affects progress bars.
@@ -343,6 +345,13 @@ class ScanpyConfig(object):
             return True
         except NameError:
             return False
+
+    def __str__(self) -> str:
+        return '\n'.join(
+            f'{k} = {v!r}'
+            for k, v in inspect.getmembers(self)
+            if not k.startswith("_") and not k == 'getdoc'
+        )
 
 
 settings = ScanpyConfig()

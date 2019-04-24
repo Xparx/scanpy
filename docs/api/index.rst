@@ -36,7 +36,6 @@ For visual quality control, see :func:`~scanpy.pl.highest_expr_gens` and
    pp.log1p
    pp.pca
    pp.normalize_total
-   pp.normalize_quantile
    pp.regress_out
    pp.scale
    pp.subsample
@@ -96,6 +95,7 @@ Clustering and trajectory inference
 
    tl.leiden
    tl.louvain
+   tl.dendrogram
    tl.dpt
    tl.paga
 
@@ -107,6 +107,7 @@ Marker genes
    :toctree: .
 
    tl.rank_genes_groups
+   tl.filter_rank_genes_groups
 
 Gene scores, Cell cycle
 ~~~~~~~~~~~~~~~~~~~~~~~

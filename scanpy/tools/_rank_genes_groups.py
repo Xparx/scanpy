@@ -69,21 +69,21 @@ def rank_genes_groups(
 
     Returns
     -------
-    names : structured `np.ndarray` (`.uns['rank_genes_groups']`)
+    **names** : structured `np.ndarray` (`.uns['rank_genes_groups']`)
         Structured array to be indexed by group id storing the gene
         names. Ordered according to scores.
-    scores : structured `np.ndarray` (`.uns['rank_genes_groups']`)
+    **scores** : structured `np.ndarray` (`.uns['rank_genes_groups']`)
         Structured array to be indexed by group id storing the z-score
         underlying the computation of a p-value for each gene for each
         group. Ordered according to scores.
-    logfoldchanges : structured `np.ndarray` (`.uns['rank_genes_groups']`)
+    **logfoldchanges** : structured `np.ndarray` (`.uns['rank_genes_groups']`)
         Structured array to be indexed by group id storing the log2
         fold change for each gene for each group. Ordered according to
         scores. Only provided if method is 't-test' like.
         Note: this is an approximation calculated from mean-log values.
-    pvals : structured `np.ndarray` (`.uns['rank_genes_groups']`)
+    **pvals** : structured `np.ndarray` (`.uns['rank_genes_groups']`)
         p-values.
-    pvals_adj : structured `np.ndarray` (`.uns['rank_genes_groups']`)
+    **pvals_adj** : structured `np.ndarray` (`.uns['rank_genes_groups']`)
         Corrected p-values.
 
     Notes
@@ -428,15 +428,14 @@ def filter_rank_genes_groups(adata, key=None, groupby=None, use_raw=True, log=Tr
                              key_added='rank_genes_groups_filtered',
                              min_in_group_fraction=0.25, min_fold_change=2,
                              max_out_group_fraction=0.5):
-    """
-    Uses the results of :ref:`scanpy.tl.rank_genes_groups`, to filter out genes
-    based on fold change and fraction of genes expressing the gene within and outside the
-    `groupby` categories.
+    """Filters out genes based on fold change and fraction of genes expressing the gene within and outside the `groupby` categories.
 
-    Results are stored in adata.uns[key_added] (default: 'rank_genes_groups_filtered')
+    See :func:`~scanpy.tl.rank_genes_groups`.
+
+    Results are stored in `adata.uns[key_added]` (default: 'rank_genes_groups_filtered').
 
     To preserve the original structure of adata.uns['rank_genes_groups'], filtered genes
-    are set to `nan`.
+    are set to `NaN`.
 
     Parameters
     ----------
@@ -460,11 +459,9 @@ def filter_rank_genes_groups(adata, key=None, groupby=None, use_raw=True, log=Tr
     >>> adata = sc.datasets.pbmc68k_reduced()
     >>> sc.tl.rank_genes_groups(adata, 'bulk_labels', method='wilcoxon')
     >>> sc.tl.filter_rank_genes_groups(adata, min_fold_change=3)
-
-    # visualize results
+    >>> # visualize results
     >>> sc.pl.rank_genes_groups(adata, key='rank_genes_groups_filtered')
-
-    # visualize results using dotplot
+    >>> # visualize results using dotplot
     >>> sc.pl.rank_genes_groups_dotplot(adata, key='rank_genes_groups_filtered')
     """
     if key is None:

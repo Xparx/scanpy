@@ -3,7 +3,103 @@ from scipy.sparse import issparse
 from sklearn.utils import sparsefuncs
 from .. import logging as logg
 from ..utils import doc_params
-from ._docs import doc_norm_descr, doc_quant_descr, doc_params_bulk, doc_norm_quant, doc_norm_return, doc_ex_quant, doc_ex_total
+
+doc_norm_descr = """\
+Normalize counts per cell.
+
+For `fraction=1`, this is standard total-count normalization, if choosing
+`target_sum=1e6`, this is CPM normalization.
+
+Normalize each cell by sum of counts over genes that make up less than fraction
+(specified by *fraction*) of the total counts in every cell. These genes in each
+cell will sum up to *target_sum*.
+
+Similar functions are used, for example, by Seurat [Satija15]_, Cell Ranger
+[Zheng17]_ or SPRING [Weinreb17]_.\
+"""
+
+doc_params_bulk = """\
+Parameters
+----------
+adata : :class:`~anndata.AnnData`
+    The annotated data matrix of shape `n_obs` × `n_vars`. Rows correspond
+    to cells and columns to genes.
+target_sum : `float` or `None`, optional (default: `None`)
+    If `None`, after normalization, each observation (cell) has a total count
+    equal to the median of total counts for observations (cells)
+    before normalization.
+fraction : `float`, optional (default: 1)
+    Only use genes that make up less than fraction (specified by *fraction*)
+    of the total count in every cell. So only these genes will sum up
+    to *target_sum*.
+key_added : `str`, optional (default: `None`)
+    Name of the field in `adata.obs` where the total counts per cell are
+    stored.
+layers : `str` or list of `str`, optional (default: `None`)
+    List of layers to normalize. Set to `'all'` to normalize all layers.
+layer_norm : `str` or `None`, optional (default: `None`)
+    Specifies how to normalize layers:
+
+    * If `None`, after normalization, for each layer in *layers* each cell\
+    has a total count equal to the median of the *counts_per_cell* before\
+    normalization of the layer.
+
+    * If `'after'`, for each layer in *layers* each cell has\
+    a total count equal to `target_sum`.
+
+    * If `'X'`, for each layer in *layers* each cell has a total count equal\
+    to the median of total counts for observations (cells) of `adata.X`\
+    before normalization.
+
+inplace : `bool`, optional (default: `True`)
+    Whether to update `adata` or return dictionary with normalized copies of
+    `adata.X` and `adata.layers`.\
+"""
+
+doc_norm_return = """\
+Returns
+-------
+Returns dictionary with normalized copies of `adata.X` and `adata.layers`
+or updates `adata` with normalized version of the original
+`adata.X` and `adata.layers`, depending on `inplace`.
+"""
+
+doc_examples = """\
+Example
+--------
+>>> adata = AnnData(np.array([[1, 0], [3, 0], [5, 6]]))
+>>> print(adata.X.sum(axis=1))
+[  1.   3.  11.]
+>>> sc.pp.normalize_total(adata, key_added='n_counts')
+>>> print(adata.obs)
+>>> print(adata.X.sum(axis=1))
+   n_counts
+0       1.0
+1       3.0
+2      11.0
+[ 3.  3.  3.]
+>>> sc.pp.normalize_total(adata, target_sum=1,
+>>>                       key_added='n_counts2')
+>>> print(adata.obs)
+>>> print(adata.X.sum(axis=1))
+   n_counts  n_counts2
+0       1.0        3.0
+1       3.0        3.0
+2      11.0        3.0
+[ 1.  1.  1.]
+
+An example using `fraction`.
+
+>>> adata = AnnData(np.array([[1, 0, 1], [3, 0, 1], [5, 6, 1]]))
+>>> sc.pp.normalize_total(adata, fraction=0.7)
+>>> print(adata.X)
+[[1.         0.         1.        ]
+ [3.         0.         1.        ]
+ [0.71428573 0.85714287 0.14285715]]
+
+Genes 1 and 2 were normalized and now sum up to 1 in each cell.
+"""
+
 
 def _normalize_data(X, counts, after=None, copy=False):
     X = X.copy() if copy else X
@@ -16,22 +112,22 @@ def _normalize_data(X, counts, after=None, copy=False):
         X /= counts[:, None]
     return X if copy else None
 
-@doc_params(quant_descr=doc_quant_descr, params_bulk=doc_params_bulk, norm_quant=doc_norm_quant,
-            norm_return=doc_norm_return, ex_quant=doc_ex_quant)
-def normalize_quantile(adata, target_sum=None, quantile=0.95, key_added=None,
-                       layers=None, layer_norm=None, inplace=True):
+
+@doc_params(norm_descr=doc_norm_descr, params_bulk=doc_params_bulk, norm_return=doc_norm_return,
+            examples=doc_examples)
+def normalize_total(adata, target_sum=None, fraction=1, key_added=None,
+                    layers=None, layer_norm=None, inplace=True):
     """\
-    {quant_descr}
+    {norm_descr}
 
     {params_bulk}
-    {norm_quant}
 
     {norm_return}
 
-    {ex_quant}
+    {examples}
     """
-    if quantile < 0 or quantile > 1:
-        raise ValueError('Choose quantile between 0 and 1.')
+    if fraction < 0 or fraction > 1:
+        raise ValueError('Choose fraction between 0 and 1.')
 
     X = adata.X
     gene_subset = None
@@ -39,15 +135,15 @@ def normalize_quantile(adata, target_sum=None, quantile=0.95, key_added=None,
     # not recarray because need to support sparse
         dat = {}
 
-    if quantile < 1:
+    if fraction < 1:
         logg.msg('normalizing by count per cell for \
-                  genes that make up less than quantile * total count per cell', r=True)
+                  genes that make up less than fraction * total count per cell', r=True)
         X = adata.X
 
         counts_per_cell = X.sum(1)
         counts_per_cell = np.ravel(counts_per_cell)
 
-        gene_subset = (X>counts_per_cell[:, None]*quantile).sum(0)
+        gene_subset = (X>counts_per_cell[:, None]*fraction).sum(0)
         gene_subset = (np.ravel(gene_subset) == 0)
     else:
         logg.msg('normalizing by total count per cell', r=True)
@@ -104,18 +200,3 @@ def normalize_quantile(adata, target_sum=None, quantile=0.95, key_added=None,
             .format(key_added))
 
     return dat if not inplace else None
-
-@doc_params(norm_descr=doc_norm_descr, params_bulk=doc_params_bulk, norm_return=doc_norm_return, ex_total=doc_ex_total)
-def normalize_total(adata, target_sum=None, key_added=None, layers=None, layer_norm=None, inplace=True):
-    """\
-    {norm_descr}
-
-    {params_bulk}
-
-    {norm_return}
-
-    {ex_total}
-    """
-    return normalize_quantile(adata=adata, target_sum=target_sum,
-                              key_added=key_added, layers=layers,
-                              layer_norm=layer_norm, quantile=1, inplace=inplace)
