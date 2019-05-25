@@ -1061,7 +1061,8 @@ def stacked_violin(adata, var_names, groupby=None, log=False, use_raw=None, num_
 def heatmap(adata, var_names, groupby=None, use_raw=None, log=False, num_categories=7,
             dendrogram=False, gene_symbols=None, var_group_positions=None, var_group_labels=None,
             var_group_rotation=None, layer=None, standard_scale=None, swap_axes=False,
-            show_gene_labels=None, show=None, save=None, figsize=None, **kwds):
+            show_gene_labels=None, show=None, save=None, figsize=None, sort_by=None,
+            sort_first=False, **kwds):
     """\
     Heatmap of the expression values of genes.
 
@@ -1155,7 +1156,19 @@ def heatmap(adata, var_names, groupby=None, use_raw=None, log=False, num_categor
             logg.warn('Gene labels are not shown when more than 50 genes are visualized. To show '
                       'gene labels set `show_gene_labels=True`')
     if categorical:
-        obs_tidy = obs_tidy.sort_index()
+        if sort_by is not None:
+            obs_tidy[sort_by] = adata.obs[sort_by].values
+            obs_tidy = obs_tidy.reset_index()
+            if sort_first:
+                obs_tidy = obs_tidy.sort_values([sort_by, groupby])
+            else:
+                obs_tidy = obs_tidy.sort_values([groupby, sort_by])
+
+            obs_tidy = obs_tidy.set_index(groupby)
+            del obs_tidy[sort_by]
+            # return obs_tidy
+        else:
+            obs_tidy = obs_tidy.sort_index()
 
     goal_points = 1000
     obs_tidy = _reduce_and_smooth(obs_tidy, goal_points)
