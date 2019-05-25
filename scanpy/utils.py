@@ -3,6 +3,7 @@
 
 import sys
 import inspect
+from pathlib import Path
 from weakref import WeakSet
 from collections import namedtuple
 from functools import partial, wraps
@@ -30,7 +31,7 @@ def check_versions():
                       'Currently, Python 3.5 leads to a bug in `tl.marker_gene_overlap` '
                       'and we might stop supporting it in the future.')
 
-    import anndata
+    import anndata, umap
     # NOTE: pytest does not correctly retrieve anndata's version? why?
     #       use the following hack...
     if anndata.__version__ != '0+unknown':
@@ -39,6 +40,13 @@ def check_versions():
             raise ImportError('Scanpy {} needs anndata version >=0.6.10, not {}.\n'
                               'Run `pip install anndata -U --no-deps`.'
                               .format(__version__, anndata.__version__))
+
+    if umap.__version__ < LooseVersion('0.3.0'):
+        from . import __version__
+        # make this a warning, not an error
+        # it might be useful for people to still be able to run it
+        logg.warn('Scanpy {} needs umap version >=0.3.0, not {}.'
+                  .format(__version__, umap.__version__))
 
 
 def getdoc(c_or_f: Union[Callable, type]) -> Optional[str]:
@@ -878,19 +886,11 @@ def subsample_n(X, n=0, seed=0):
     return Xsampled, rows
 
 
-def check_presence_download(filename, backup_url):
+def check_presence_download(filename: Path, backup_url):
     """Check if file is present otherwise download."""
-    import os
-    filename = str(filename) #  Throws error for Path on 3.5
-    if not os.path.exists(filename):
-        from .readwrite import download_progress
-        dr = os.path.dirname(filename)
-        try:
-            os.makedirs(dr)
-        except FileExistsError:
-            pass  # ignore if dir already exists
-        from urllib.request import urlretrieve
-        urlretrieve(backup_url, filename, reporthook=download_progress)
+    if not filename.is_file():
+        from .readwrite import download
+        download(backup_url, filename)
 
 
 def hierarch_cluster(M):
