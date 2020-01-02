@@ -50,6 +50,11 @@ def scatter(
         frameon=None,
         right_margin=None,
         left_margin=None,
+        edges=False,
+        edges_width=0.1,
+        edges_color='grey',
+        arrows=False,
+        arrows_kwds=None,
         size=None,
         title=None,
         show=None,
@@ -105,6 +110,11 @@ def scatter(
             legend_fontsize=legend_fontsize,
             legend_fontweight=legend_fontweight,
             legend_fontoutline=legend_fontoutline,
+            edges=edges,
+            edges_width=edges_width,
+            edges_color=edges_color,
+            arrows=arrows,
+            arrows_kwds=arrows_kwds,
             color_map=color_map,
             palette=palette,
             frameon=frameon,
@@ -118,7 +128,7 @@ def scatter(
     elif x is not None and y is not None:
         if ((x in adata.obs.keys() or x in adata.var.index)
             and (y in adata.obs.keys() or y in adata.var.index)
-            and (color is None or color in adata.obs.keys() or color in adata.var.index)):
+            and (color is None or color in adata.obs.keys() or color in adata.var.index or is_color_like(color))):
             axs = _scatter_obs(
                 adata=adata,
                 x=x,
@@ -256,6 +266,11 @@ def _scatter_obs(
         use_raw=None,
         layers='X',
         sort_order=True,
+        edges=False,
+        edges_width=0.1,
+        edges_color='grey',
+        arrows=False,
+        arrows_kwds=None,
         alpha=None,
         basis=None,
         groups=None,
@@ -417,6 +432,11 @@ def _scatter_obs(
                        color_map=color_map,
                        show_ticks=show_ticks,
                        ax=ax)
+
+    if edges:
+        utils.plot_edges(ax, adata, basis, edges_width, edges_color, components)
+    if arrows:
+        utils.plot_arrows(ax, adata, basis, arrows_kwds, components)
 
     def add_centroid(centroids, name, Y, mask):
         Y_mask = Y[mask]
@@ -835,6 +855,7 @@ def stacked_violin(adata, var_names, groupby=None, log=False, use_raw=None, num_
     has_var_groups = True if var_group_positions is not None and len(var_group_positions) > 0 else False
     if isinstance(var_names, str):
         var_names = [var_names]
+
     categories, obs_tidy = _prepare_dataframe(adata, var_names, groupby, use_raw, log, num_categories,
                                               gene_symbols=gene_symbols, layer=layer)
 

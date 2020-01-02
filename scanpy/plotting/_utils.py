@@ -314,7 +314,8 @@ def add_colors_for_categorical_sample_annotation(adata, key, palette=None, force
             adata.uns[key + '_colors'][iname] = 'grey'
 
 
-def plot_edges(axs, adata, basis, edges_width, edges_color):
+def plot_edges(axs, adata, basis, edges_width, edges_color, components):
+    components = components + 1 if basis == 'diffmap' else components
     if not isinstance(axs, list): axs = [axs]
     if 'neighbors' not in adata.uns:
         raise ValueError('`edges=True` requires `pp.neighbors` to be run before.')
@@ -323,17 +324,17 @@ def plot_edges(axs, adata, basis, edges_width, edges_color):
         warnings.simplefilter("ignore")
         for ax in axs:
             edge_collection = nx.draw_networkx_edges(
-                g, adata.obsm['X_' + basis],
+                g, adata.obsm['X_' + basis][:, components],
                 ax=ax, width=edges_width, edge_color=edges_color)
             edge_collection.set_zorder(-2)
             edge_collection.set_rasterized(settings._vector_friendly)
 
 
-def plot_arrows(axs, adata, basis, arrows_kwds=None):
+def plot_arrows(axs, adata, basis, components, arrows_kwds=None):
     if not isinstance(axs, list): axs = [axs]
     if 'Delta_' + basis not in adata.obsm.keys():
         raise ValueError('`arrows=True` requires \'Delta_\' + basis from velocyto.')
-    X = adata.obsm['X_' + basis]
+    X = adata.obsm['X_' + basis][:, components]
     V = adata.obsm['Delta_' + basis]
     for ax in axs:
         quiver_kwds = arrows_kwds if arrows_kwds is not None else {}
