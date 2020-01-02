@@ -397,7 +397,7 @@ def rank_genes_groups(
         dtype=[(rn, 'float32') for rn in groups_order_save])
     adata.uns[key_added]['names'] = np.rec.fromarrays(
         [n for n in rankings_gene_names],
-        dtype=[(rn, 'U50') for rn in groups_order_save])
+        dtype=[(rn, 'U500') for rn in groups_order_save])
 
     if method in {'t-test', 't-test_overestim_var', 'wilcoxon'}:
         adata.uns[key_added]['logfoldchanges'] = np.rec.fromarrays(
