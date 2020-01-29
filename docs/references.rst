@@ -1,6 +1,10 @@
 References
 ----------
 
+.. [Amid19] Amid & Warmuth (2019),
+   *TriMap: Large-scale Dimensionality Reduction Using Triplets*,
+   `arXiv <https://arxiv.org/abs/1910.00204>`__.
+
 .. [Amir13] Amir *et al.* (2013),
    *viSNE enables visualization of high dimensional single-cell data and reveals phenotypic heterogeneity of leukemia*,
    `Nature Biotechnology <https://doi.org/10.1038/nbt.2594>`__.
@@ -45,6 +49,10 @@ References
 .. [Fruchterman91] Fruchterman & Reingold (1991),
    *Graph drawing by force-directed placement*,
    `Software: Practice & Experience <http://doi.org:10.1002/spe.4380211102>`__.
+
+.. [Gardner00] Gardner *et al.*, (2000)
+   *Construction of a genetic toggle switch in Escherichia coli*,
+   `Nature <https://doi.org/10.1038/35002131>`__.
 
 .. [Hagberg08] Hagberg *et al.* (2008),
    *Exploring Network Structure, Dynamics, and Function using NetworkX*,
@@ -98,7 +106,7 @@ References
 .. [Lambiotte09] Lambiotte *et al.* (2009)
    *Laplacian Dynamics and Multiscale Modular Structure in Networks*
    `arXiv <https://arxiv.org/abs/0812.1770>`__.
-   
+
 .. [Leek12] Leek *et al.* (2012),
    *sva: Surrogate Variable Analysis. R package*
    `Bioconductor <https://doi.org/10.18129/B9.bioc.sva>`__.
@@ -144,21 +152,25 @@ References
    *Identification of transcriptional signatures for cell types from single-cell RNA-Seq*,
    `bioRxiv <https://doi.org/10.1101/258566>`__.
 
-.. [Park18] Park *et al.* (2018),
-   *Fast Batch Alignment of Single Cell Transcriptomes Unifies Multiple Mouse Cell Atlases into an Integrated Landscape*
-   `bioRxiv <https://doi.org/10.1101/397042>`__.
-   
+.. [Paul15] Paul *et al.* (2015),
+   *Transcriptional Heterogeneity and Lineage Commitment in Myeloid Progenitors*,
+   `Cell <https://doi.org/10.1016/j.cell.2015.11.013>`__.
+
 .. [Pedersen12] Pedersen (2012),
    *Python implementation of ComBat*
    `GitHub <https://github.com/brentp/combat.py>`__.
-   
+
 .. [Pedregosa11] Pedregosa *et al.* (2011),
    *Scikit-learn: Machine Learning in Python*,
    `JMLR <http://www.jmlr.org/papers/v12/pedregosa11a.html>`__.
 
-.. [Paul15] Paul *et al.* (2015),
-   *Transcriptional Heterogeneity and Lineage Commitment in Myeloid Progenitors*,
-   `Cell <https://doi.org/10.1016/j.cell.2015.11.013>`__.
+.. [Polanski19] Polanski *et al.* (2019),
+   *BBKNN: fast batch alignment of single cell transcriptomes*
+   `Bioinformatics <https://doi.org/10.1093/bioinformatics/btz625>`__.
+
+.. [Plass18] Plass (2018),
+   *Cell type atlas and lineage tree of a whole complex animal by single-cell transcriptomics*
+   `Science <https://doi.org/10.1126/science.aaq1723>`__.
 
 .. [Scialdone15] Scialdone *et al.* (2015),
    *Computational assignment of cell-cycle stage from single-cell transcriptome data*
@@ -167,7 +179,7 @@ References
 .. [Setty18] Setty *et al.* (2018),
    *Palantir characterizes cell fate continuities in human hematopoiesis*
    `bioRxiv <https://doi.org/10.1101/385328>`__.
-   
+
 .. [Traag17] Traag (2017),
    *Louvain*,
    `GitHub <https://doi.org/10.5281/zenodo.35117>`__.
@@ -202,7 +214,7 @@ References
 
 .. [Wolf19] Wolf *et al.* (2019),
    *PAGA: Graph abstraction reconciles clustering with trajectory inference through a topology preserving map of single cells.*
-   `Genome Biology <https://doi.org/10.1186/s13059-019-1663-x>`__, 
+   `Genome Biology <https://doi.org/10.1186/s13059-019-1663-x>`__,
    `bioRxiv <https://doi.org/10.1101/208819>`__.
 
 .. [Zheng17] Zheng *et al.* (2017),

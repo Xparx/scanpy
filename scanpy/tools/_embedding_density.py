@@ -1,57 +1,57 @@
-"""Calculate density of cells in embeddings
+"""\
+Calculate density of cells in embeddings
 """
 
 import numpy as np
-from scipy.stats import gaussian_kde
 from anndata import AnnData
 from typing import Union, Optional, Sequence
 
 from .. import logging as logg
-from ..utils import sanitize_anndata
+from .._utils import sanitize_anndata
 
-def _calc_density(
-    x: np.ndarray,
-    y: np.ndarray,
-):
-    """
+
+def _calc_density(x: np.ndarray, y: np.ndarray):
+    """\
     Function to calculate the density of cells in an embedding.
-    """    
+    """
+    from scipy.stats import gaussian_kde
 
     # Calculate the point density
-    xy = np.vstack([x,y])
+    xy = np.vstack([x, y])
     z = gaussian_kde(xy)(xy)
 
     min_z = np.min(z)
     max_z = np.max(z)
 
     # Scale between 0 and 1
-    scaled_z = (z-min_z)/(max_z-min_z)
+    scaled_z = (z - min_z) / (max_z - min_z)
 
-    return(scaled_z)
+    return scaled_z
 
 
 def embedding_density(
     adata: AnnData,
-    basis: str,
-    *,
+    # there is no asterisk here for backward compat (previously, there was)
+    basis: str = 'umap',  # was positional before 1.4.5
     groupby: Optional[str] = None,
     key_added: Optional[str] = None,
-    components: Union[str, Sequence[str]] = None
-):
-    """Calculate the density of cells in an embedding (per condition)
+    components: Union[str, Sequence[str]] = None,
+) -> None:
+    """\
+    Calculate the density of cells in an embedding (per condition).
 
     Gaussian kernel density estimation is used to calculate the density of
     cells in an embedded space. This can be performed per category over a
-    categorical cell annotation. The cell density can be plotted using the 
+    categorical cell annotation. The cell density can be plotted using the
     `sc.pl.embedding_density()` function.
 
     Note that density values are scaled to be between 0 and 1. Thus, the
-    density value at each cell is only comparable to other densities in 
+    density value at each cell is only comparable to other densities in
     the same condition category.
 
     This function was written by Sophie Tritschler and implemented into
     Scanpy by Malte Luecken.
-    
+
     Parameters
     ----------
     adata
@@ -80,88 +80,101 @@ def embedding_density(
 
     Examples
     --------
+    >>> import scanpy as sc
     >>> adata = sc.datasets.pbmc68k_reduced()
     >>> sc.tl.umap(adata)
     >>> sc.tl.embedding_density(adata, basis='umap', groupby='phase')
-    >>> sc.pl.embedding_density(adata, basis='umap', key='umap_density_phase', 
-    ...                         group='G1')
-    >>> sc.pl.embedding_density(adata, basis='umap', key='umap_density_phase', 
-    ...                         group='S')
+    >>> sc.pl.embedding_density(
+    ...     adata, basis='umap', key='umap_density_phase', group='G1'
+    ... )
+    >>> sc.pl.embedding_density(
+    ...     adata, basis='umap', key='umap_density_phase', group='S'
+    ... )
     """
-    sanitize_anndata(adata) # to ensure that newly created covariates are categorical to test for categoy numbers
+    # to ensure that newly created covariates are categorical
+    # to test for category numbers
+    sanitize_anndata(adata)
 
-    logg.info('computing density on \'{}\''.format(basis), r=True)
+    logg.info(f'computing density on {basis!r}')
 
     # Test user inputs
     basis = basis.lower()
-    
+
     if basis == 'fa':
         basis = 'draw_graph_fa'
 
-    if 'X_'+basis not in adata.obsm_keys():
-        raise ValueError('Cannot find the embedded representation `adata.obsm[X_{!r}]`. '
-                         'Compute the embedding first.'.format(basis))
+    if f'X_{basis}' not in adata.obsm_keys():
+        raise ValueError(
+            "Cannot find the embedded representation "
+            f"`adata.obsm['X_{basis}']`. Compute the embedding first."
+        )
 
-    if components is None: components = '1,2'
-    if isinstance(components, str): components = components.split(',')
+    if components is None:
+        components = '1,2'
+    if isinstance(components, str):
+        components = components.split(',')
     components = np.array(components).astype(int) - 1
 
     if len(components) != 2:
         raise ValueError('Please specify exactly 2 components, or `None`.')
 
-    if basis == 'diffmap': components += 1
+    if basis == 'diffmap':
+        components += 1
 
     if groupby is not None:
         if groupby not in adata.obs:
-            raise ValueError('Could not find {!r} `.obs` column.'.format(groupby))
+            raise ValueError(f'Could not find {groupby!r} `.obs` column.')
 
         if adata.obs[groupby].dtype.name != 'category':
-            raise ValueError('{!r} column does not contain Categorical data'.format(groupby))
-    
+            raise ValueError(
+                f'{groupby!r} column does not contain Categorical data'
+            )
+
         if len(adata.obs[groupby].cat.categories) > 10:
-            raise ValueError('More than 10 categories in {!r} column.'.format(groupby))
+            raise ValueError(f'More than 10 categories in {groupby!r} column.')
 
     # Define new covariate name
     if key_added is not None:
         density_covariate = key_added
     elif groupby is not None:
-        density_covariate = basis+'_density_'+groupby
+        density_covariate = f'{basis}_density_{groupby}'
     else:
-        density_covariate = basis+'_density'
+        density_covariate = f'{basis}_density'
 
     # Calculate the densities over each category in the groupby column
     if groupby is not None:
         categories = adata.obs[groupby].cat.categories
 
         density_values = np.zeros(adata.n_obs)
-        
+
         for cat in categories:
             cat_mask = adata.obs[groupby] == cat
-            embed_x = adata.obsm['X_'+basis][cat_mask, components[0]]
-            embed_y = adata.obsm['X_'+basis][cat_mask, components[1]]
+            embed_x = adata.obsm[f'X_{basis}'][cat_mask, components[0]]
+            embed_y = adata.obsm[f'X_{basis}'][cat_mask, components[1]]
 
             dens_embed = _calc_density(embed_x, embed_y)
             density_values[cat_mask] = dens_embed
 
         adata.obs[density_covariate] = density_values
-        
-    # Calculate the density over the whole embedding without subsetting
-    else: #if groupby is None
-        embed_x = adata.obsm['X_'+basis][:, components[0]]
-        embed_y = adata.obsm['X_'+basis][:, components[1]]
+    else:  # if groupby is None
+        # Calculate the density over the whole embedding without subsetting
+        embed_x = adata.obsm[f'X_{basis}'][:, components[0]]
+        embed_y = adata.obsm[f'X_{basis}'][:, components[1]]
 
         adata.obs[density_covariate] = _calc_density(embed_x, embed_y)
 
-
     # Reduce diffmap components for labeling
-    # Note: plot_scatter takes care of correcting diffmap components for plotting automatically
-    if basis != 'diffmap': components += 1
+    # Note: plot_scatter takes care of correcting diffmap components
+    #       for plotting automatically
+    if basis != 'diffmap':
+        components += 1
 
-    adata.uns[density_covariate+'_params'] = {'covariate':groupby, 'components':components.tolist()}
-    
+    adata.uns[f'{density_covariate}_params'] = dict(
+        covariate=groupby, components=components.tolist()
+    )
 
-    logg.hint('added\n'
-              '    \'{}\', densities (adata.obs)\n'
-              '    \'{}_params\', parameter (adata.uns)'.format(density_covariate, density_covariate))
-
-    return None
+    logg.hint(
+        f"added\n"
+        f"    '{density_covariate}', densities (adata.obs)\n"
+        f"    '{density_covariate}_params', parameter (adata.uns)"
+    )

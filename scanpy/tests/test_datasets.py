@@ -45,14 +45,14 @@ def test_pbmc3k(tmp_dataset_dir):
 @pytest.mark.internet
 def test_ebi_expression_atlas(tmp_dataset_dir):
     adata = sc.datasets.ebi_expression_atlas("E-MTAB-4888")
-    assert adata.shape == (4032, 27785)
+    assert adata.shape == (2315, 23852)
 
 
 def test_krumsiek11(tmp_dataset_dir):
     adata = sc.datasets.krumsiek11()
     assert adata.shape == (640, 11)
     assert all(
-           np.unique(adata.obs["cell_type"])
+        np.unique(adata.obs["cell_type"])
         == np.array(["Ery", "Mk", "Mo", "Neu", "progenitor"])
     )
 

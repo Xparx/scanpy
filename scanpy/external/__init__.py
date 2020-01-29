@@ -1,13 +1,13 @@
 from . import tl
 from . import pl
 from . import pp
-
-from .. import _exporting as exporting
+from . import exporting
 
 import sys
-from .. import utils
-utils.annotate_doc_types(sys.modules[__name__], 'scanpy')
-del sys, utils
+from .. import _utils
+
+_utils.annotate_doc_types(sys.modules[__name__], 'scanpy')
+del sys, _utils
 
 
 __doc__ = """\
@@ -19,11 +19,13 @@ Import Scanpy's wrappers to external tools as::
 
    import scanpy.external as sce
 
+If you'd like to see your tool included here, please open a `pull request <https://github.com/theislab/scanpy>`_!
+
 Preprocessing: PP
 ------------------
 
-Batch effect correction
-~~~~~~~~~~~~~~~~~~~~~~~
+Data integration
+~~~~~~~~~~~~~~~~
 
 .. autosummary::
    :toctree: .
@@ -55,6 +57,7 @@ Embeddings
 
    tl.phate
    tl.palantir
+   tl.trimap
 
 Clustering and trajectory inference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -81,6 +84,7 @@ Plotting: PL
    :toctree: .
 
    pl.phate
+   pl.trimap
    tl.palantir
 
 

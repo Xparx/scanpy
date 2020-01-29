@@ -1,25 +1,39 @@
-from typing import Union, Optional, Any, Mapping, Callable
+from types import MappingProxyType
+from typing import Union, Optional, Any, Mapping, Callable, NamedTuple, Generator, Tuple
 
 import numpy as np
 import scipy
 from anndata import AnnData
 from numpy.random import RandomState
-from scipy.sparse import issparse, coo_matrix
-from sklearn.metrics import pairwise_distances
+from scipy.sparse import issparse, coo_matrix, csr_matrix
 from sklearn.utils import check_random_state
 
-from .._settings import settings
 from .. import logging as logg
-from .. import utils
-from ..utils import doc_params
-from ..logging import _settings_verbosity_greater_or_equal_than
-from ..tools._utils import choose_representation, doc_use_rep, doc_n_pcs
+from .. import _utils
+from .._utils import _doc_params
+from .._compat import Literal
+from ..tools._utils import _choose_representation, doc_use_rep, doc_n_pcs
 
 N_DCS = 15  # default number of diffusion components
 N_PCS = 50  # default number of PCs
 
 
-@doc_params(n_pcs=doc_n_pcs, use_rep=doc_use_rep)
+_Method = Literal['umap', 'gauss', 'rapids']
+_MetricFn = Callable[[np.ndarray, np.ndarray], float]
+# from sklearn.metrics.pairwise_distances.__doc__:
+_MetricSparseCapable = Literal[
+    'cityblock', 'cosine', 'euclidean', 'l1', 'l2', 'manhattan'
+]
+_MetricScipySpatial = Literal[
+    'braycurtis', 'canberra', 'chebyshev', 'correlation', 'dice', 'hamming',
+    'jaccard', 'kulsinski', 'mahalanobis', 'minkowski', 'rogerstanimoto',
+    'russellrao', 'seuclidean', 'sokalmichener', 'sokalsneath', 'sqeuclidean',
+    'yule'
+]
+_Metric = Union[_MetricSparseCapable, _MetricScipySpatial]
+
+
+@_doc_params(n_pcs=doc_n_pcs, use_rep=doc_use_rep)
 def neighbors(
     adata: AnnData,
     n_neighbors: int = 15,
@@ -27,10 +41,10 @@ def neighbors(
     use_rep: Optional[str] = None,
     knn: bool = True,
     random_state: Optional[Union[int, RandomState]] = 0,
-    method: str = 'umap',
-    metric: Union[str, Callable[[np.ndarray, np.ndarray], float]] = 'euclidean',
-    metric_kwds: Mapping[str, Any] = {},
-    copy: bool = False
+    method: Optional[_Method] = 'umap',
+    metric: Union[_Metric, _MetricFn] = 'euclidean',
+    metric_kwds: Mapping[str, Any] = MappingProxyType({}),
+    copy: bool = False,
 ) -> Optional[AnnData]:
     """\
     Compute a neighborhood graph of observations [McInnes18]_.
@@ -62,9 +76,11 @@ def neighbors(
         `n_neighbors` nearest neighbor.
     random_state
         A numpy random seed.
-    method : {{'umap', 'gauss', `None`}}  (default: `'umap'`)
+    method
         Use 'umap' [McInnes18]_ or 'gauss' (Gauss kernel following [Coifman05]_
         with adaptive width [Haghverdi16]_) for computing connectivities.
+        Use 'rapids' for the RAPIDS implementation of UMAP (experimental, GPU
+        only).
     metric
         A known metric’s name or a callable that returns a distance.
     metric_kwds
@@ -83,7 +99,7 @@ def neighbors(
         Instead of decaying weights, this stores distances for each pair of
         neighbors.
     """
-    logg.info('computing neighbors', r=True)
+    start = logg.info('computing neighbors')
     adata = adata.copy() if copy else adata
     if adata.isview:  # we shouldn't need this here...
         adata._init_as_actual(adata.copy())
@@ -91,9 +107,10 @@ def neighbors(
     neighbors.compute_neighbors(
         n_neighbors=n_neighbors, knn=knn, n_pcs=n_pcs, use_rep=use_rep,
         method=method, metric=metric, metric_kwds=metric_kwds,
-        random_state=random_state)
+        random_state=random_state,
+    )
     adata.uns['neighbors'] = {}
-    adata.uns['neighbors']['params'] = {'n_neighbors': n_neighbors, 'method': method}
+    adata.uns['neighbors']['params'] = {'n_neighbors': neighbors.n_neighbors, 'method': method}
     adata.uns['neighbors']['params']['metric'] = metric
     if metric_kwds:
         adata.uns['neighbors']['params']['metric_kwds'] = metric_kwds
@@ -105,19 +122,30 @@ def neighbors(
     adata.uns['neighbors']['connectivities'] = neighbors.connectivities
     if neighbors.rp_forest is not None:
         adata.uns['neighbors']['rp_forest'] = neighbors.rp_forest
-    logg.info('    finished', time=True, end=' ' if _settings_verbosity_greater_or_equal_than(3) else '\n')
-    logg.hint(
-        'added to `.uns[\'neighbors\']`\n'
-        '    \'distances\', distances for each pair of neighbors\n'
-        '    \'connectivities\', weighted adjacency matrix')
+    logg.info(
+        '    finished',
+        time=start,
+        deep=(
+            'added to `.uns[\'neighbors\']`\n'
+            '    \'distances\', distances for each pair of neighbors\n'
+            '    \'connectivities\', weighted adjacency matrix'
+        ),
+    )
     return adata if copy else None
 
 
-def _rp_forest_generate(rp_forest_dict):
-    from collections import namedtuple
+class FlatTree(NamedTuple):
+    hyperplanes: None
+    offsets: None
+    children: None
+    indices: None
 
-    props = ['hyperplanes', 'offsets', 'children', 'indices']
-    FlatTree = namedtuple('FlatTree', props)
+
+RPForestDict = Mapping[str, Mapping[str, np.ndarray]]
+
+
+def _rp_forest_generate(rp_forest_dict: RPForestDict) -> Generator[FlatTree, None, None]:
+    props = FlatTree._fields
     num_trees = len(rp_forest_dict[props[0]]['start'])-1
 
     for i in range(num_trees):
@@ -135,48 +163,15 @@ def _rp_forest_generate(rp_forest_dict):
     yield FlatTree(*tree)
 
 
-def neighbors_update(adata, adata_new, k=10, queue_size=5, random_state=0):
-    # only with use_rep='X' for now
-    from umap.nndescent import make_initialisations, make_initialized_nnd_search, initialise_search
-    from umap.umap_ import INT32_MAX, INT32_MIN
-    from umap.utils import deheap_sort
-    import umap.distances as dist
-
-    if 'metric_kwds' in adata.uns['neighbors']['params']:
-        dist_args = tuple(adata.uns['neighbors']['params']['metric_kwds'].values())
-    else:
-        dist_args = ()
-    dist_func = dist.named_distances[adata.uns['neighbors']['params']['metric']]
-
-    random_init, tree_init = make_initialisations(dist_func, dist_args)
-    search = make_initialized_nnd_search(dist_func, dist_args)
-
-    search_graph = adata.uns['neighbors']['distances'].copy()
-    search_graph.data = (search_graph.data > 0).astype(np.int8)
-    search_graph = search_graph.maximum(search_graph.transpose())
-    # prune it?
-
-    random_state = check_random_state(random_state)
-    rng_state = random_state.randint(INT32_MIN, INT32_MAX, 3).astype(np.int64)
-
-    if 'rp_forest' in adata.uns['neighbors']:
-        rp_forest = _rp_forest_generate(adata.uns['neighbors']['rp_forest'])
-    else:
-        rp_forest = None
-    train = adata.X
-    test = adata_new.X
-
-    init = initialise_search(rp_forest, train, test, int(k * queue_size), random_init, tree_init, rng_state)
-    result = search(train, search_graph.indptr, search_graph.indices, init, test)
-
-    indices, dists = deheap_sort(result)
-    return indices[:, :k], dists[:, :k]
-
-
 def compute_neighbors_umap(
-        X, n_neighbors, random_state=None,
-        metric='euclidean', metric_kwds={}, angular=False,
-        verbose=False):
+    X: Union[np.ndarray, csr_matrix],
+    n_neighbors: int,
+    random_state: Optional[Union[int, RandomState]] = None,
+    metric: Union[_Metric, _MetricFn] = 'euclidean',
+    metric_kwds: Mapping[str, Any] = MappingProxyType({}),
+    angular: bool = False,
+    verbose: bool = False,
+):
     """This is from umap.fuzzy_simplicial_set [McInnes18]_.
 
     Given a set of data X, a neighborhood size, and a measure of distance
@@ -190,14 +185,14 @@ def compute_neighbors_umap(
     ----------
     X: array of shape (n_samples, n_features)
         The data to be modelled as a fuzzy simplicial set.
-    n_neighbors: int
+    n_neighbors
         The number of neighbors to use to approximate geodesic distance.
         Larger numbers induce more global estimates of the manifold that can
         miss finer detail, while smaller values will focus on fine manifold
         structure to the detriment of the larger picture.
-    random_state: numpy RandomState or equivalent
+    random_state
         A state capable being used as a numpy random state.
-    metric: string or function (optional, default 'euclidean')
+    metric
         The metric to use to compute distances in high dimensional space.
         If a string is passed it must match a valid predefined metric. If
         a general metric is required a function that takes two 1d arrays and
@@ -229,14 +224,14 @@ def compute_neighbors_umap(
         can have arguments passed via the metric_kwds dictionary. At this
         time care must be taken and dictionary elements must be ordered
         appropriately; this will hopefully be fixed in the future.
-    metric_kwds: dict (optional, default {})
+    metric_kwds
         Arguments to pass on to the metric, such as the ``p`` value for
         Minkowski distance.
-    angular: bool (optional, default False)
+    angular
         Whether to use angular/cosine distance for the random projection
         forest for seeding NN-descent to determine approximate nearest
         neighbors.
-    verbose: bool (optional, default False)
+    verbose
         Whether to report information on the current progress of the algorithm.
 
     Returns
@@ -247,14 +242,41 @@ def compute_neighbors_umap(
 
     random_state = check_random_state(random_state)
 
-    knn_indices, knn_dists, forest = nearest_neighbors(X, n_neighbors, random_state=random_state,
-                                                       metric=metric, metric_kwds=metric_kwds,
-                                                       angular=angular, verbose=verbose)
+    knn_indices, knn_dists, forest = nearest_neighbors(
+        X, n_neighbors, random_state=random_state,
+        metric=metric, metric_kwds=metric_kwds,
+        angular=angular, verbose=verbose,
+    )
 
     return knn_indices, knn_dists, forest
 
 
-def get_sparse_matrix_from_indices_distances_umap(knn_indices, knn_dists, n_obs, n_neighbors):
+def compute_neighbors_rapids(
+    X: np.ndarray,
+    n_neighbors: int
+):
+    """Compute nearest neighbors using RAPIDS cuml.
+
+    Parameters
+    ----------
+    X: array of shape (n_samples, n_features)
+        The data to compute nearest neighbors for.
+    n_neighbors
+        The number of neighbors to use.
+
+        Returns
+    -------
+    **knn_indices**, **knn_dists** : np.arrays of shape (n_observations, n_neighbors)
+    """
+    from cuml.neighbors import NearestNeighbors
+    nn = NearestNeighbors(n_neighbors=n_neighbors)
+    X_contiguous = np.ascontiguousarray(X, dtype=np.float32)
+    nn.fit(X_contiguous)
+    knn_distsq, knn_indices = nn.kneighbors(X_contiguous)
+    return knn_indices, np.sqrt(knn_distsq) # cuml uses sqeuclidean metric so take sqrt
+
+
+def _get_sparse_matrix_from_indices_distances_umap(knn_indices, knn_dists, n_obs, n_neighbors):
     rows = np.zeros((n_obs * n_neighbors), dtype=np.int64)
     cols = np.zeros((n_obs * n_neighbors), dtype=np.int64)
     vals = np.zeros((n_obs * n_neighbors), dtype=np.float64)
@@ -278,10 +300,13 @@ def get_sparse_matrix_from_indices_distances_umap(knn_indices, knn_dists, n_obs,
     return result.tocsr()
 
 
-def compute_connectivities_umap(knn_indices, knn_dists,
-        n_obs, n_neighbors, set_op_mix_ratio=1.0,
-        local_connectivity=1.0):
-    """This is from umap.fuzzy_simplicial_set [McInnes18]_.
+def _compute_connectivities_umap(
+    knn_indices, knn_dists,
+    n_obs, n_neighbors, set_op_mix_ratio=1.0,
+    local_connectivity=1.0,
+):
+    """\
+    This is from umap.fuzzy_simplicial_set [McInnes18]_.
 
     Given a set of data X, a neighborhood size, and a measure of distance
     compute the fuzzy simplicial set (here represented as a fuzzy graph in
@@ -293,27 +318,41 @@ def compute_connectivities_umap(knn_indices, knn_dists,
     from umap.umap_ import fuzzy_simplicial_set
 
     X = coo_matrix(([], ([], [])), shape=(n_obs, 1))
-    connectivities = fuzzy_simplicial_set(X, n_neighbors, None, None,
-                                          knn_indices=knn_indices, knn_dists=knn_dists,
-                                          set_op_mix_ratio=set_op_mix_ratio,
-                                          local_connectivity=local_connectivity)
-    distances = get_sparse_matrix_from_indices_distances_umap(knn_indices, knn_dists, n_obs, n_neighbors)
+    connectivities = fuzzy_simplicial_set(
+        X,
+        n_neighbors,
+        None,
+        None,
+        knn_indices=knn_indices,
+        knn_dists=knn_dists,
+        set_op_mix_ratio=set_op_mix_ratio,
+        local_connectivity=local_connectivity,
+    )
+
+    if isinstance(connectivities, tuple):
+        # In umap-learn 0.4, this returns (result, sigmas, rhos)
+        connectivities = connectivities[0]
+
+    distances = _get_sparse_matrix_from_indices_distances_umap(
+        knn_indices, knn_dists, n_obs, n_neighbors
+    )
 
     return distances, connectivities.tocsr()
 
 
-def get_sparse_matrix_from_indices_distances_numpy(indices, distances, n_obs, n_neighbors):
+def _get_sparse_matrix_from_indices_distances_numpy(indices, distances, n_obs, n_neighbors):
     n_nonzero = n_obs * n_neighbors
     indptr = np.arange(0, n_nonzero + 1, n_neighbors)
-    D = scipy.sparse.csr_matrix((distances.copy().ravel(),  # copy the data, otherwise strange behavior here
-                                indices.copy().ravel(),
-                                indptr),
-                                shape=(n_obs, n_obs))
+    D = csr_matrix((
+        distances.copy().ravel(),  # copy the data, otherwise strange behavior here
+        indices.copy().ravel(),
+        indptr,
+    ), shape=(n_obs, n_obs))
     D.eliminate_zeros()
     return D
 
 
-def get_indices_distances_from_sparse_matrix(D, n_neighbors):
+def _get_indices_distances_from_sparse_matrix(D, n_neighbors: int):
     indices = np.zeros((D.shape[0], n_neighbors), dtype=int)
     distances = np.zeros((D.shape[0], n_neighbors), dtype=D.dtype)
     n_neighbors_m1 = n_neighbors - 1
@@ -335,7 +374,7 @@ def get_indices_distances_from_sparse_matrix(D, n_neighbors):
     return indices, distances
 
 
-def get_indices_distances_from_dense_matrix(D, n_neighbors):
+def _get_indices_distances_from_dense_matrix(D, n_neighbors: int):
     sample_range = np.arange(D.shape[0])[:, None]
     indices = np.argpartition(D, n_neighbors-1, axis=1)[:, :n_neighbors]
     indices = indices[sample_range, np.argsort(D[sample_range, indices])]
@@ -343,7 +382,7 @@ def get_indices_distances_from_dense_matrix(D, n_neighbors):
     return indices, distances
 
 
-def _backwards_compat_get_full_X_diffmap(adata):
+def _backwards_compat_get_full_X_diffmap(adata: AnnData) -> np.ndarray:
     if 'X_diffmap0' in adata.obs:
         return np.c_[adata.obs['X_diffmap0'].values[:, None],
                      adata.obsm['X_diffmap']]
@@ -351,7 +390,7 @@ def _backwards_compat_get_full_X_diffmap(adata):
         return adata.obsm['X_diffmap']
 
 
-def _backwards_compat_get_full_eval(adata):
+def _backwards_compat_get_full_eval(adata: AnnData):
     if 'X_diffmap0' in adata.obs:
         return np.r_[1, adata.uns['diffmap_evals']]
     else:
@@ -384,7 +423,15 @@ def _make_forest_dict(forest):
 class OnFlySymMatrix:
     """Emulate a matrix where elements are calculated on the fly.
     """
-    def __init__(self, get_row, shape, DC_start=0, DC_end=-1, rows=None, restrict_array=None):
+    def __init__(
+        self,
+        get_row: Callable[[Any], np.ndarray],
+        shape: Tuple[int, int],
+        DC_start: int = 0,
+        DC_end: int = -1,
+        rows: Optional[Mapping[Any, np.ndarray]] = None,
+        restrict_array: Optional[np.ndarray] = None,
+    ):
         self.get_row = get_row
         self.shape = shape
         self.DC_start = DC_start
@@ -393,7 +440,7 @@ class OnFlySymMatrix:
         self.restrict_array = restrict_array  # restrict the array to a subset
 
     def __getitem__(self, index):
-        if isinstance(index, int) or isinstance(index, np.integer):
+        if isinstance(index, (int, np.integer)):
             if self.restrict_array is None:
                 glob_index = index
             else:
@@ -420,13 +467,16 @@ class OnFlySymMatrix:
         """Generate a view restricted to a subset of indices.
         """
         new_shape = index_array.shape[0], index_array.shape[0]
-        return OnFlySymMatrix(self.get_row, new_shape, DC_start=self.DC_start,
-                              DC_end=self.DC_end,
-                              rows=self.rows, restrict_array=index_array)
+        return OnFlySymMatrix(
+            self.get_row, new_shape, DC_start=self.DC_start,
+            DC_end=self.DC_end,
+            rows=self.rows, restrict_array=index_array,
+        )
 
 
 class Neighbors:
-    """Data represented as graph of nearest neighbors.
+    """\
+    Data represented as graph of nearest neighbors.
 
     Represent a data matrix as a graph of nearest neighbor relations (edges)
     among data points (nodes).
@@ -444,11 +494,12 @@ class Neighbors:
         self._init_iroot()
         # use the graph in adata
         info_str = ''
-        self.knn = None
-        self._distances = None
-        self._connectivities = None
-        self._number_connected_components = None
-        self._rp_forest = None
+        self.knn: Optional[bool] = None
+        self._distances: Union[np.ndarray, csr_matrix, None] = None
+        self._connectivities: Union[np.ndarray, csr_matrix, None] = None
+        self._transitions_sym: Union[np.ndarray, csr_matrix, None] = None
+        self._number_connected_components: Optional[int] = None
+        self._rp_forest: Optional[RPForestDict] = None
         if 'neighbors' in adata.uns:
             if 'distances' in adata.uns['neighbors']:
                 self.knn = issparse(adata.uns['neighbors']['distances'])
@@ -461,11 +512,13 @@ class Neighbors:
             if 'params' in adata.uns['neighbors']:
                 self.n_neighbors = adata.uns['neighbors']['params']['n_neighbors']
             else:
+                def count_nonzero(a: Union[np.ndarray, csr_matrix]) -> int:
+                    return a.count_nonzero() if issparse(a) else np.count_nonzero(a)
                 # estimating n_neighbors
                 if self._connectivities is None:
-                    self.n_neighbors = int(self._distances.count_nonzero() / self._distances.shape[0])
+                    self.n_neighbors = int(count_nonzero(self._distances) / self._distances.shape[0])
                 else:
-                    self.n_neighbors = int(self._connectivities.count_nonzero() / self._connectivities.shape[0] / 2)
+                    self.n_neighbors = int(count_nonzero(self._connectivities) / self._connectivities.shape[0] / 2)
             info_str += '`.distances` `.connectivities` '
             self._number_connected_components = 1
             if issparse(self._connectivities):
@@ -490,26 +543,26 @@ class Neighbors:
             self._eigen_basis = None
             self.n_dcs = None
         if info_str != '':
-            logg.msg('    initialized {}'.format(info_str), v=4)
+            logg.debug(f'    initialized {info_str}')
 
     @property
-    def rp_forest(self):
+    def rp_forest(self) -> Optional[RPForestDict]:
         return self._rp_forest
 
     @property
-    def distances(self):
+    def distances(self) -> Union[np.ndarray, csr_matrix, None]:
         """Distances between data points (sparse matrix).
         """
         return self._distances
 
     @property
-    def connectivities(self):
+    def connectivities(self) -> Union[np.ndarray, csr_matrix, None]:
         """Connectivities between data points (sparse matrix).
         """
         return self._connectivities
 
     @property
-    def transitions(self):
+    def transitions(self) -> Union[np.ndarray, csr_matrix]:
         """Transition matrix (sparse matrix).
 
         Is conjugate to the symmetrized transition matrix via::
@@ -527,10 +580,10 @@ class Neighbors:
             Zinv = self.Z.power(-1)
         else:
             Zinv = np.diag(1./np.diag(self.Z))
-        return self.Z.dot(self.transitions_sym).dot(Zinv)
+        return self.Z @ self.transitions_sym @ Zinv
 
     @property
-    def transitions_sym(self):
+    def transitions_sym(self) -> Union[np.ndarray, csr_matrix, None]:
         """Symmetrized transition matrix (sparse matrix).
 
         Is conjugate to the transition matrix via::
@@ -555,12 +608,6 @@ class Neighbors:
         return self._eigen_basis
 
     @property
-    def laplacian(self):
-        """Graph laplacian (sparse matrix).
-        """
-        return self._laplacian
-
-    @property
     def distances_dpt(self):
         """DPT distances (on-fly matrix).
 
@@ -573,20 +620,20 @@ class Neighbors:
     def to_igraph(self):
         """Generate igraph from connectiviies.
         """
-        return utils.get_igraph_from_adjacency(self.connectivities)
+        return _utils.get_igraph_from_adjacency(self.connectivities)
 
-    @doc_params(n_pcs=doc_n_pcs, use_rep=doc_use_rep)
+    @_doc_params(n_pcs=doc_n_pcs, use_rep=doc_use_rep)
     def compute_neighbors(
         self,
         n_neighbors: int = 30,
         knn: bool = True,
         n_pcs: Optional[int] = None,
         use_rep: Optional[str] = None,
-        method: str = 'umap',
-        random_state: Optional[Union[RandomState, int]] = 0,
+        method: _Method = 'umap',
+        random_state: Optional[Union[int, RandomState]] = 0,
         write_knn_indices: bool = False,
-        metric: str = 'euclidean',
-        metric_kwds: Mapping[str, Any] = {}
+        metric: _Metric = 'euclidean',
+        metric_kwds: Mapping[str, Any] = MappingProxyType({}),
     ) -> None:
         """\
         Compute distances and connectivities of neighbors.
@@ -606,54 +653,67 @@ class Neighbors:
         Also writes `.knn_indices` and `.knn_distances` if
         `write_knn_indices==True`.
         """
+        from sklearn.metrics import pairwise_distances
+        start_neighbors = logg.debug('computing neighbors')
         if n_neighbors > self._adata.shape[0]:  # very small datasets
             n_neighbors = 1 + int(0.5*self._adata.shape[0])
-            logg.warn('n_obs too small: adjusting to `n_neighbors = {}`'
-                      .format(n_neighbors))
+            logg.warning(f'n_obs too small: adjusting to `n_neighbors = {n_neighbors}`')
         if method == 'umap' and not knn:
             raise ValueError('`method = \'umap\' only with `knn = True`.')
-        if method not in {'umap', 'gauss'}:
-            raise ValueError('`method` needs to be \'umap\' or \'gauss\'.')
+        if method == 'rapids' and metric != 'euclidean':
+            raise ValueError("`method` 'rapids' only supports the 'euclidean' `metric`.")
+        if method not in {'umap', 'gauss', 'rapids'}:
+            raise ValueError("`method` needs to be 'umap', 'gauss', or 'rapids'.")
         if self._adata.shape[0] >= 10000 and not knn:
-            logg.warn(
-                'Using high n_obs without `knn=True` takes a lot of memory...')
+            logg.warning('Using high n_obs without `knn=True` takes a lot of memory...')
         self.n_neighbors = n_neighbors
         self.knn = knn
-        X = choose_representation(self._adata, use_rep=use_rep, n_pcs=n_pcs)
+        X = _choose_representation(self._adata, use_rep=use_rep, n_pcs=n_pcs)
         # neighbor search
         use_dense_distances = (metric == 'euclidean' and X.shape[0] < 8192) or knn == False
         if use_dense_distances:
             _distances = pairwise_distances(X, metric=metric, **metric_kwds)
-            knn_indices, knn_distances = get_indices_distances_from_dense_matrix(
+            knn_indices, knn_distances = _get_indices_distances_from_dense_matrix(
                 _distances, n_neighbors)
             if knn:
-                self._distances = get_sparse_matrix_from_indices_distances_numpy(
+                self._distances = _get_sparse_matrix_from_indices_distances_numpy(
                     knn_indices, knn_distances, X.shape[0], n_neighbors)
             else:
                 self._distances = _distances
+        elif method == 'rapids':
+            knn_indices, knn_distances = compute_neighbors_rapids(X, n_neighbors)
         else:
             # non-euclidean case and approx nearest neighbors
             if X.shape[0] < 4096:
                 X = pairwise_distances(X, metric=metric, **metric_kwds)
                 metric = 'precomputed'
-            knn_indices, knn_distances, _ = compute_neighbors_umap(
+            knn_indices, knn_distances, forest = compute_neighbors_umap(
                 X, n_neighbors, random_state, metric=metric, metric_kwds=metric_kwds)
-            #self._rp_forest = _make_forest_dict(forest)
+            # very cautious here
+            try:
+                if forest:
+                    self._rp_forest = _make_forest_dict(forest)
+            except:
+                pass
         # write indices as attributes
         if write_knn_indices:
             self.knn_indices = knn_indices
             self.knn_distances = knn_distances
-        logg.msg('computed neighbors', t=True, v=4)
-        if not use_dense_distances or method == 'umap':
+        start_connect = logg.debug('computed neighbors', time=start_neighbors)
+        if not use_dense_distances or method in {'umap', 'rapids'}:
             # we need self._distances also for method == 'gauss' if we didn't
             # use dense distances
-            self._distances, self._connectivities = compute_connectivities_umap(
-                knn_indices, knn_distances, self._adata.shape[0], self.n_neighbors)
+            self._distances, self._connectivities = _compute_connectivities_umap(
+                knn_indices,
+                knn_distances,
+                self._adata.shape[0],
+                self.n_neighbors,
+            )
         # overwrite the umap connectivities if method is 'gauss'
         # self._distances is unaffected by this
         if method == 'gauss':
             self._compute_connectivities_diffmap()
-        logg.msg('computed connectivities', t=True, v=4)
+        logg.debug('computed connectivities', time=start_connect)
         self._number_connected_components = 1
         if issparse(self._connectivities):
             from scipy.sparse.csgraph import connected_components
@@ -664,11 +724,11 @@ class Neighbors:
         # init distances
         if self.knn:
             Dsq = self._distances.power(2)
-            indices, distances_sq = get_indices_distances_from_sparse_matrix(
+            indices, distances_sq = _get_indices_distances_from_sparse_matrix(
                 Dsq, self.n_neighbors)
         else:
             Dsq = np.power(self._distances, 2)
-            indices, distances_sq = get_indices_distances_from_dense_matrix(
+            indices, distances_sq = _get_indices_distances_from_dense_matrix(
                 Dsq, self.n_neighbors)
 
         # exclude the first point, the 0th neighbor
@@ -725,12 +785,13 @@ class Neighbors:
 
         self._connectivities = W
 
-    def compute_transitions(self, density_normalize=True):
-        """Compute transition matrix.
+    def compute_transitions(self, density_normalize: bool = True):
+        """\
+        Compute transition matrix.
 
         Parameters
         ----------
-        density_normalize : `bool`
+        density_normalize
             The density rescaling of Coifman and Lafon (2006): Then only the
             geometry of the data matters, not the sampled density.
 
@@ -738,6 +799,7 @@ class Neighbors:
         -------
         Makes attributes `.transitions_sym` and `.transitions` available.
         """
+        start = logg.info('computing transitions')
         W = self._connectivities
         # density normalization as of Coifman et al. (2005)
         # ensures that kernel matrix is independent of sampling density
@@ -749,7 +811,7 @@ class Neighbors:
                 Q = np.diag(1.0/q)
             else:
                 Q = scipy.sparse.spdiags(1.0/q, 0, W.shape[0], W.shape[0])
-            K = Q.dot(W).dot(Q)
+            K = Q @ W @ Q
         else:
             K = W
 
@@ -759,23 +821,27 @@ class Neighbors:
             self.Z = np.diag(1.0/z)
         else:
             self.Z = scipy.sparse.spdiags(1.0/z, 0, K.shape[0], K.shape[0])
-        self._transitions_sym = self.Z.dot(K).dot(self.Z)
-        logg.msg('computed transitions', v=4, time=True)
+        self._transitions_sym = self.Z @ K @ self.Z
+        logg.info('    finished', time=start)
 
-    def compute_eigen(self, n_comps=15, sym=None, sort='decrease'):
-        """Compute eigen decomposition of transition matrix.
+    def compute_eigen(
+        self,
+        n_comps: int = 15,
+        sym: Optional[bool] = None,
+        sort: Literal['decrease', 'increase'] = 'decrease',
+    ):
+        """\
+        Compute eigen decomposition of transition matrix.
 
         Parameters
         ----------
-        n_comps : `int`
+        n_comps
             Number of eigenvalues/vectors to be computed, set `n_comps = 0` if
             you need all eigenvectors.
-        sym : `bool`
+        sym
             Instead of computing the eigendecomposition of the assymetric
             transition matrix, computed the eigendecomposition of the symmetric
             Ktilde matrix.
-        matrix : sparse matrix, np.ndarray, optional (default: `.connectivities`)
-            Matrix to diagonalize. Merely for testing and comparison purposes.
 
         Returns
         -------
@@ -804,16 +870,19 @@ class Neighbors:
             which = 'LM' if sort == 'decrease' else 'SM'
             # it pays off to increase the stability with a bit more precision
             matrix = matrix.astype(np.float64)
-            evals, evecs = scipy.sparse.linalg.eigsh(matrix, k=n_comps,
-                                                  which=which, ncv=ncv)
+            evals, evecs = scipy.sparse.linalg.eigsh(
+                matrix, k=n_comps, which=which, ncv=ncv
+            )
             evals, evecs = evals.astype(np.float32), evecs.astype(np.float32)
         if sort == 'decrease':
             evals = evals[::-1]
             evecs = evecs[:, ::-1]
-        logg.info('    eigenvalues of transition matrix\n'
-                  '    {}'.format(str(evals).replace('\n', '\n    ')))
+        logg.info(
+            '    eigenvalues of transition matrix\n'
+            '    {}'.format(str(evals).replace('\n', '\n    '))
+        )
         if self._number_connected_components > len(evals)/2:
-            logg.warn('Transition matrix has many disconnected components!')
+            logg.warning('Transition matrix has many disconnected components!')
         self._eigen_values = evals
         self._eigen_basis = evecs
 
@@ -822,9 +891,10 @@ class Neighbors:
         # set iroot directly
         if 'iroot' in self._adata.uns:
             if self._adata.uns['iroot'] >= self._adata.n_obs:
-                logg.warn('Root cell index {} does not exist for {} samples. '
-                          'Is ignored.'
-                          .format(self._adata.uns['iroot'], self._adata.n_obs))
+                logg.warning(
+                    f'Root cell index {self._adata.uns["iroot"]} does not '
+                    f'exist for {self._adata.n_obs} samples. It’s ignored.'
+                )
             else:
                 self.iroot = self._adata.uns['iroot']
             return
@@ -837,77 +907,32 @@ class Neighbors:
             self._set_iroot_via_xroot(xroot)
 
     def _get_dpt_row(self, i):
-        use_mask = False
+        mask = None
         if self._number_connected_components > 1:
-            use_mask = True
             label = self._connected_components[1][i]
             mask = self._connected_components[1] == label
-        row = sum([(self.eigen_values[l]/(1-self.eigen_values[l])
-                     * (self.eigen_basis[i, l] - self.eigen_basis[:, l]))**2
-                   # account for float32 precision
-                    for l in range(0, self.eigen_values.size) if self.eigen_values[l] < 0.9994])
+        row = sum(
+            (
+                self.eigen_values[l] / (1-self.eigen_values[l])
+                * (self.eigen_basis[i, l] - self.eigen_basis[:, l])
+            )**2
+            # account for float32 precision
+            for l in range(0, self.eigen_values.size)
+            if self.eigen_values[l] < 0.9994
+        )
         # thanks to Marius Lange for pointing Alex to this:
         # we will likely remove the contributions from the stationary state below when making
         # backwards compat breaking changes, they originate from an early implementation in 2015
         # they never seem to have deteriorated results, but also other distance measures (see e.g.
         # PAGA paper) don't have it, which makes sense
-        row += sum([(self.eigen_basis[i, l] - self.eigen_basis[:, l])**2
-                    for l in range(0, self.eigen_values.size) if self.eigen_values[l] >= 0.9994])
-        if not use_mask:
-            return np.sqrt(row)
-        else:
+        row += sum(
+            (self.eigen_basis[i, l] - self.eigen_basis[:, l])**2
+            for l in range(0, self.eigen_values.size)
+            if self.eigen_values[l] >= 0.9994
+        )
+        if mask is not None:
             row[~mask] = np.inf
-            return np.sqrt(row)
-
-    def _compute_Lp_matrix(self):
-        """See Fouss et al. (2006) and von Luxburg et al. (2007).
-
-        See Proposition 6 in von Luxburg (2007) and the inline equations
-        right in the text above.
-        """
-        self.Lp = sum([1/self.eigen_values[i]
-                      * np.outer(self.eigen_basis[:, i], self.eigen_basis[:, i])
-                      for i in range(1, self.eigen_values.size)])
-
-    def _compute_C_matrix(self):
-        """See Fouss et al. (2006) and von Luxburg et al. (2007).
-
-        This is the commute-time matrix. It's a squared-euclidian distance
-        matrix in :math:`\\mathbb{R}^n`.
-        """
-        self.C = np.repeat(np.diag(self.Lp)[:, np.newaxis],
-                           self.Lp.shape[0], axis=1)
-        self.C += np.repeat(np.diag(self.Lp)[np.newaxis, :],
-                            self.Lp.shape[0], axis=0)
-        self.C -= 2*self.Lp
-        # the following is much slower
-        # self.C = np.zeros(self.Lp.shape)
-        # for i in range(self.Lp.shape[0]):
-        #     for j in range(self.Lp.shape[1]):
-        #         self.C[i, j] = self.Lp[i, i] + self.Lp[j, j] - 2*self.Lp[i, j]
-        volG = np.sum(self.z)
-        self.C *= volG
-        settings.mt(0, 'computed commute distance matrix')
-        self.distances_dpt = self.C
-
-    def _compute_MFP_matrix(self):
-        """See Fouss et al. (2006).
-
-        This is the mean-first passage time matrix. It's not a distance.
-
-        Mfp[i, k] := m(k|i) in the notation of Fouss et al. (2006). This
-        corresponds to the standard notation for transition matrices (left index
-        initial state, right index final state, i.e. a right-stochastic
-        matrix, with each row summing to one).
-        """
-        self.MFP = np.zeros(self.Lp.shape)
-        for i in range(self.Lp.shape[0]):
-            for k in range(self.Lp.shape[1]):
-                for j in range(self.Lp.shape[1]):
-                    self.MFP[i, k] += (self.Lp[i, j] - self.Lp[i, k]
-                                       - self.Lp[k, j] + self.Lp[k, k]) * self.z[j]
-        settings.mt(0, 'computed mean first passage time matrix')
-        self.distances_dpt = self.MFP
+        return np.sqrt(row)
 
     def _set_pseudotime(self):
         """Return pseudotime with respect to root point.
@@ -936,27 +961,12 @@ class Neighbors:
         iroot = 0
         for i in range(self._adata.shape[0]):
             diff = self._adata.X[i, :] - xroot
-            dsq = diff.dot(diff)
+            dsq = diff @ diff
             if dsq < dsqroot:
                 dsqroot = dsq
                 iroot = i
                 if np.sqrt(dsqroot) < 1e-10: break
-        logg.msg('setting root index to', iroot, v=4)
+        logg.debug(f'setting root index to {iroot}')
         if self.iroot is not None and iroot != self.iroot:
-            logg.warn('Changing index of iroot from {} to {}.'.format(self.iroot, iroot))
+            logg.warning(f'Changing index of iroot from {self.iroot} to {iroot}.')
         self.iroot = iroot
-
-    def _test_embed(self):
-        """
-        Checks and tests for embed.
-        """
-        # pl.semilogy(w,'x',label=r'$ \widetilde K$')
-        # pl.show()
-        if _settings_verbosity_greater_or_equal_than(3):
-            # output of spectrum of K for comparison
-            w, v = np.linalg.eigh(self.K)
-            logg.msg('spectrum of K (kernel)')
-        if _settings_verbosity_greater_or_equal_than(4):
-            # direct computation of spectrum of T
-            w, vl, vr = scipy.linalg.eig(self.T, left=True)
-            logg.msg('spectrum of transition matrix (should be same as of Ktilde)')
